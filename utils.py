@@ -47,3 +47,41 @@ def load(filepath):
             tracks[column] = tracks[column].astype('category')
 
         return tracks
+
+def get_audio_path(audio_dir, track_id):
+    """
+    Return the path to the mp3 given the directory where the audio is stored
+    and the track ID.
+
+    Examples
+    --------
+    >>> import utils
+    >>> AUDIO_DIR = os.environ.get('AUDIO_DIR')
+    >>> utils.get_audio_path(AUDIO_DIR, 2)
+    '../data/fma_small/000/000002.mp3'
+
+    """
+    tid_str = '{:06d}'.format(track_id)
+    return os.path.join(audio_dir, tid_str[:3], tid_str + '.mp3')
+
+def get_audios(indices: pd.Index) -> pd.DataFrame:
+    """TODO describe function
+
+    :param indices: 
+    :type indices: pd.Index
+    :returns: 
+
+    """
+    indices = y_train.index[:1000]
+    audios = []
+    samplerates = []
+    for i in tqdm(indices):
+        filename = utils.get_audio_path(audio_dir, i)
+        x, sr = librosa.load(filename, sr=None, mono=True)
+        audios.append(x)
+        samplerates.append(sr)
+
+    data = {'audio': audios,
+            'sample rate': samplerates}
+    X_train = pd.DataFrame(data, index=indices)
+    return X_train
