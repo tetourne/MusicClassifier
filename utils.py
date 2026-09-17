@@ -3,8 +3,15 @@ import pandas as pd
 import ast
 
 
-def load(filepath):
+def load(filepath: str) -> pd.DataFrame:
+    """Load CSV file, base on filename.
 
+    Args:
+        Symbol’s function definition is void: python-args-at-point
+
+    Returns:
+        The DataFrame containing the CSV data.
+    """
     filename = os.path.basename(filepath)
 
     if 'features' in filename:
@@ -48,34 +55,36 @@ def load(filepath):
 
         return tracks
 
-def get_audio_path(audio_dir, track_id):
-    """
-    Return the path to the mp3 given the directory where the audio is stored
-    and the track ID.
+def get_audio_path(audio_dir: str, track_id: int) -> str:
+    """Return the path to the audio file given the directory
+    where the audio is stored and the track ID.
 
-    Examples
-    --------
-    >>> import utils
-    >>> AUDIO_DIR = os.environ.get('AUDIO_DIR')
-    >>> utils.get_audio_path(AUDIO_DIR, 2)
-    '../data/fma_small/000/000002.mp3'
+    Args:
+        audio_dir: The root directory of all audio files.
+        track_id: The track ID of the file to retrieve.
 
+    Returns:
+        The path to the audio files.
     """
     tid_str = '{:06d}'.format(track_id)
     return os.path.join(audio_dir, tid_str[:3], tid_str + '.mp3')
 
-def get_audios(indices: pd.Index) -> pd.DataFrame:
-    """TODO describe function
+def get_audios(track_ids: pd.Index) -> pd.DataFrame:
+    """Load all the audio files corresponding to the given track IDs and
+    store them in a DataFrame.
 
-    :param indices: 
-    :type indices: pd.Index
-    :returns: 
+    Args:
+        track_ids: The list of all track IDs to read.
 
+    Returns:
+        The DataFrame containing the data.
+    Raises:
+        FileNotFoundError: If an audio file for one of the track IDs
+        cannot be found.
     """
-    indices = y_train.index[:1000]
     audios = []
     samplerates = []
-    for i in tqdm(indices):
+    for i in tqdm(track_ids):
         filename = utils.get_audio_path(audio_dir, i)
         x, sr = librosa.load(filename, sr=None, mono=True)
         audios.append(x)
@@ -83,5 +92,5 @@ def get_audios(indices: pd.Index) -> pd.DataFrame:
 
     data = {'audio': audios,
             'sample rate': samplerates}
-    X_train = pd.DataFrame(data, index=indices)
+    X_train = pd.DataFrame(data, index=track_ids)
     return X_train
