@@ -1,13 +1,15 @@
 import os
 import pandas as pd
 import ast
+import librosa
+from tqdm import tqdm
 
 
 def load(filepath: str) -> pd.DataFrame:
     """Load CSV file, base on filename.
 
     Args:
-        Symbol’s function definition is void: python-args-at-point
+        filepath: the path to the CSV file to read.
 
     Returns:
         The DataFrame containing the CSV data.
@@ -69,11 +71,12 @@ def get_audio_path(audio_dir: str, track_id: int) -> str:
     tid_str = '{:06d}'.format(track_id)
     return os.path.join(audio_dir, tid_str[:3], tid_str + '.mp3')
 
-def get_audios(track_ids: pd.Index) -> pd.DataFrame:
+def get_audios(audio_dir: str, track_ids: pd.Index) -> pd.DataFrame:
     """Load all the audio files corresponding to the given track IDs and
     store them in a DataFrame.
 
     Args:
+        audio_dir: The root directory of all audio files.
         track_ids: The list of all track IDs to read.
 
     Returns:
@@ -85,7 +88,7 @@ def get_audios(track_ids: pd.Index) -> pd.DataFrame:
     audios = []
     samplerates = []
     for i in tqdm(track_ids):
-        filename = utils.get_audio_path(audio_dir, i)
+        filename = get_audio_path(audio_dir, i)
         x, sr = librosa.load(filename, sr=None, mono=True)
         audios.append(x)
         samplerates.append(sr)
