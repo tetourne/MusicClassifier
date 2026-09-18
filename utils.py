@@ -5,7 +5,7 @@ import librosa
 from tqdm import tqdm
 
 
-def load(filepath: str) -> pd.DataFrame:
+def load(filepath: str | os.PathLike) -> pd.DataFrame:
     """Load CSV file, base on filename.
 
     Args:
@@ -57,7 +57,7 @@ def load(filepath: str) -> pd.DataFrame:
 
         return tracks
 
-def get_audio_path(audio_dir: str, track_id: int) -> str:
+def get_audio_path(audio_dir: str | os.PathLike, track_id: int) -> str:
     """Return the path to the audio file given the directory
     where the audio is stored and the track ID.
 
@@ -71,7 +71,7 @@ def get_audio_path(audio_dir: str, track_id: int) -> str:
     tid_str = '{:06d}'.format(track_id)
     return os.path.join(audio_dir, tid_str[:3], tid_str + '.mp3')
 
-def get_audios(audio_dir: str, track_ids: pd.Index) -> pd.DataFrame:
+def get_audios(audio_dir: str | os.PathLike, track_ids: pd.Index) -> pd.DataFrame:
     """Load all the audio files corresponding to the given track IDs and
     store them in a DataFrame.
 
@@ -95,5 +95,5 @@ def get_audios(audio_dir: str, track_ids: pd.Index) -> pd.DataFrame:
 
     data = {'audio': audios,
             'sample rate': samplerates}
-    X_train = pd.DataFrame(data, index=track_ids)
-    return X_train
+    audio_df = pd.DataFrame(data, index=track_ids)
+    return audio_df
