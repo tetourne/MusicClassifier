@@ -32,7 +32,7 @@ FEATURES_PATH = DATA_DIR / 'fma_metadata' / 'myfeatures.csv'
 FAILED_TIDS_PATH = DATA_DIR / 'fma_metadata' / 'failed_tids.npy'
 
 # Used for test and debug
-DEBUG_LIMIT = 50 # max number of files to load. Set to None if no use
+DEBUG_LIMIT = None # max number of files to load. Set to None if no use
 
 
 def save(features, ndigits):
@@ -56,10 +56,11 @@ def test(features, ndigits):
 
 def columns():
     feature_sizes = dict(chroma_stft=12, chroma_cqt=12, chroma_cens=12,
-                         tonnetz=6, mfcc=20, rmse=1, zcr=1,
+                         tonnetz=6, mfcc=20, rms=1, zcr=1,
                          spectral_centroid=1, spectral_bandwidth=1,
                          spectral_contrast=7, spectral_rolloff=1)
     moments = ('mean', 'std', 'skew', 'kurtosis', 'median', 'min', 'max', '10th', '90th')
+    # moments = ('mean', 'std', 'skew', 'kurtosis', 'median', 'min', 'max')
 
     columns = []
     for name, size in feature_sizes.items():
@@ -82,15 +83,21 @@ def compute_features(tid):
     warnings.filterwarnings('error', module='librosa')
 
     def feature_stats(name, values):
-        features[name, 'mean'] = np.mean(values, axis=1)
-        features[name, 'std'] = np.std(values, axis=1)
-        features[name, 'skew'] = stats.skew(values, axis=1)
-        features[name, 'kurtosis'] = stats.kurtosis(values, axis=1)
-        features[name, 'median'] = np.median(values, axis=1)
-        features[name, 'min'] = np.min(values, axis=1)
-        features[name, 'max'] = np.max(values, axis=1)
-        features[name, '10th'] = np.percentile(values, 10, axis=1)
-        features[name, '90th'] = np.percentile(values, 90, axis=1)
+        stats_map = {
+            'mean': np.mean(values, axis=1),
+            'std': np.std(values, axis=1),
+            'skew': stats.skew(values, axis=1),
+            'kurtosis': stats.kurtosis(values, axis=1),
+            'median': np.median(values, axis=1),
+            'min': np.min(values, axis=1),
+            'max': np.max(values, axis=1),
+            '10th': np.percentile(values, q=10, axis=1),
+            '90th': np.percentile(values, q=90, axis=1),
+        }
+        for moment, arr in stats_map.items():
+            cols = [(name, moment, '{:02d}'.format(i + 1)) for i in range(len(arr))]
+            positions = features.index.get_indexer(cols)  # resolve absolute integer index
+            features.iloc[positions] = arr.astype(np.float32)
 
     try:
         filepath = utils.get_audio_path(AUDIO_DIR, tid)
@@ -120,9 +127,8 @@ def compute_features(tid):
         f = librosa.feature.chroma_stft(S=stft**2, n_chroma=12)
         feature_stats('chroma_stft', f)
 
-        f = librosa.feature.rmse(S=stft)
-        feature_stats('rmse', f)
-
+        f = librosa.feature.rms(S=stft)
+        feature_stats('rms', f)
         f = librosa.feature.spectral_centroid(S=stft)
         feature_stats('spectral_centroid', f)
         f = librosa.feature.spectral_bandwidth(S=stft)
@@ -131,7 +137,6 @@ def compute_features(tid):
         feature_stats('spectral_contrast', f)
         f = librosa.feature.spectral_rolloff(S=stft)
         feature_stats('spectral_rolloff', f)
-
         mel = librosa.feature.melspectrogram(sr=sr, S=stft**2)
         del stft
         f = librosa.feature.mfcc(S=librosa.power_to_db(mel), n_mfcc=20)
@@ -139,7 +144,7 @@ def compute_features(tid):
 
     except Exception as e:
         print('{}: {}'.format(tid, repr(e)))
-        print(features)
+        return features
     return features
 
 
@@ -184,11 +189,12 @@ def main():
                     print(f"Failed to extract {row.name}.")
                     failed_tids.append(row.name)
 
+    failed_tids = np.sort(failed_tids)
+    np.save(FAILED_TIDS_PATH, failed_tids)
+    if failed_tids:
+        print(f"Data extraction failed for {len(failed_tids)} audios, corresponding to these audio IDs:\n{failed_tids}")
     save(features, 10)
     test(features, 10)
-    failed_tids = np.sort(failed_tids)
-    print(f"Extraction failed for {len(failed_tids)} audios, corresponding to these audio IDs:\n{failed_tids}")
-    np.save(FAILED_TIDS_PATH, failed_tids)
 
 
 if __name__ == "__main__":
