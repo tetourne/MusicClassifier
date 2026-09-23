@@ -31,10 +31,11 @@ AUDIO_DIR = DATA_DIR / "fma_small"
 TRACKS_PATH = DATA_DIR / 'fma_metadata' / 'tracks.csv'
 FEATURES_PATH = DATA_DIR / 'fma_metadata' / 'myfeatures.csv'
 FAILED_TIDS_PATH = DATA_DIR / 'fma_metadata' / 'failed_tids.npy'
-TIMINGS_PATH = DATA_DIR / 'fma_metadata' / 'timings.npy'
+TIMINGS_PATH = DATA_DIR / 'fma_metadata' / 'timings.df'
+TIMING_STATS_PATH = DATA_DIR / 'fma_metadata' / 'timing_stats.txt'
 
 # Used for test and debug
-DEBUG_LIMIT = 50 # max number of files to load. Set to None if no use
+DEBUG_LIMIT = 100 # max number of files to load. Set to None if no use
 DEBUG_SUBSET = 'small'
 
 
@@ -734,37 +735,44 @@ def main():
         tids = tracks[tracks['track', 'duration'] >= duration].index
         tracks.drop(tids, axis=0, inplace=True)
 
-        # for tid in tids:
-        #     row, timing = compute_features(tid)
-        #     timings.append(timing)
-        #     for i, r in enumerate(row):
-        #         features.loc[row.name] = r
+        for i, tid in enumerate(tqdm(tids)):
+            row, timing = compute_features(tid)
+            timings.append(timing)
+            features.loc[row.name] = row
+            if i % 1000 == 0:
+                # this can be very cosly since it's rewriting the whole file
+                # again each time. If run time is too long, increase the
+                # checkpoint interval, or only write the new rows to the file.
+                save(features, 10)
+            if row.isnull().all():
+                print(f"Failed to extract {row.name}.")
+                failed_tids.append(row.name)
+
+        # with multiprocessing.Pool(nb_workers) as pool:
+        #     it = pool.imap_unordered(compute_features, tids)
+        #     for i, tup in enumerate(tqdm(it, total=len(tids))):
+        #         row, timing = tup
+        #         features.loc[row.name] = row
         #         if i % 1000 == 0:
         #             # this can be very cosly since it's rewriting the whole file
         #             # again each time. If run time is too long, increase the
         #             # checkpoint interval, or only write the new rows to the file.
+        #             start = time.perf_counter()
         #             save(features, 10)
+        #             timing['saving_csv'] = time.perf_counter - start
+        #         timings.append(timing)                    
         #         if row.isnull().all():
         #             print(f"Failed to extract {row.name}.")
         #             failed_tids.append(row.name)
 
-        with multiprocessing.Pool(nb_workers) as pool:
-            it = pool.imap_unordered(compute_features, tids)
-            for i, row in enumerate(tqdm(it, total=len(tids))):
-                features.loc[row[0].name] = row[0]
-                timings.append(row[1])
-                if i % 1000 == 0:
-                    # this can be very cosly since it's rewriting the whole file
-                    # again each time. If run time is too long, increase the
-                    # checkpoint interval, or only write the new rows to the file.
-                    save(features, 10)
-                if row[0].isnull().all():
-                    print(f"Failed to extract {row[0].name}.")
-                    failed_tids.append(row[0].name)
-
     failed_tids = np.sort(failed_tids)
     np.save(FAILED_TIDS_PATH, failed_tids)
-    np.save(TIMINGS_PATH, np.array(timings))
+    timings_df = pd.DataFrame(timings)
+    summary = timings_df.agg(['mean', 'std', 'min', 'max']).T.sort_values('mean', ascending=False)
+    print(summary)
+    with open(TIMING_STATS_PATH, 'w') as file:
+        print(summary, file=file)
+    timings_df.to_pickle(TIMINGS_PATH)
     if len(failed_tids)>0:
         print(f"Data extraction failed for {len(failed_tids)} audios, corresponding to these audio IDs:\n{failed_tids}")
     save(features, 10)
