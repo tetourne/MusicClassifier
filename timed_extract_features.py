@@ -752,15 +752,13 @@ def main():
         #     it = pool.imap_unordered(compute_features, tids)
         #     for i, tup in enumerate(tqdm(it, total=len(tids))):
         #         row, timing = tup
+        #         timings.append(timing)                    
         #         features.loc[row.name] = row
         #         if i % 1000 == 0:
         #             # this can be very cosly since it's rewriting the whole file
         #             # again each time. If run time is too long, increase the
         #             # checkpoint interval, or only write the new rows to the file.
-        #             start = time.perf_counter()
         #             save(features, 10)
-        #             timing['saving_csv'] = time.perf_counter - start
-        #         timings.append(timing)                    
         #         if row.isnull().all():
         #             print(f"Failed to extract {row.name}.")
         #             failed_tids.append(row.name)
