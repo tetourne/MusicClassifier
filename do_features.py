@@ -89,20 +89,30 @@ def columns() -> pd.MultiIndex:
         chroma_stft=12,
         chroma_cqt=12,
         chroma_cens=12,
+        delta_chroma_stft=12,
+        delta_chroma_cqt=12,
         tonnetz_cqt=6,
         tonnetz_cens=6,
         mfcc=20,
         delta_mfcc=20,
+        delta2_mfcc=20,
         rms=1,
         zcr=1,
         spectral_centroid=1,
         spectral_bandwidth=1,
         spectral_contrast=7,
         spectral_flatness=1,
+        spectral_flux=1,
         spectral_rolloff_50=1,
         spectral_rolloff_85=1,
         spectral_rolloff_95=1,
+        harmonic_rms=1,
+        percussive_rms=1,
+        harmonic_ratio=1,
+        percussive_ratio=1,
         onset_strength=1,
+        tempogram_mean=1,
+        tempogram_std=1,
         beat_interval=1,
     )
 
@@ -206,6 +216,7 @@ def compute_features(tid: int) -> pd.Series:
         # ========================================================
         zcr = librosa.feature.zero_crossing_rate(x, frame_length=n_fft, hop_length=hop_length)
         _feature_stats(features, 'zcr', zcr)
+        del zcr
 
         # ========================================================
         # CQT
@@ -215,10 +226,13 @@ def compute_features(tid: int) -> pd.Series:
         cqt = np.abs(librosa.cqt(x, sr=sr, hop_length=hop_length, bins_per_octave=12, n_bins=7 * 12, tuning=None))
 
         # ========================================================
-        # CHROMA CQT
+        # CHROMA CQT + DELTA
         # ========================================================
         chroma_cqt = librosa.feature.chroma_cqt(C=cqt, sr=sr, n_chroma=12, n_octaves=7)
         _feature_stats(features, 'chroma_cqt', chroma_cqt)
+        delta_chroma_cqt = librosa.feature.delta(chroma_cqt)
+        _feature_stats(features, 'delta_chroma_cqt', delta_chroma_cqt)
+        del delta_chroma_cqt
 
         # ========================================================
         # CHROMA CENS
@@ -239,6 +253,10 @@ def compute_features(tid: int) -> pd.Series:
         _feature_stats(features, 'tonnetz_cens', tonnetz_cens)
 
         del cqt  # no longer needed
+        del chroma_cqt
+        del chroma_cens
+        del tonnetz_cqt
+        del tonnetz_cens
 
         # ========================================================
         # STFT
@@ -250,28 +268,78 @@ def compute_features(tid: int) -> pd.Series:
         power_stft = stft ** 2
 
         # ========================================================
-        # CHROMA STFT
+        # CHROMA STFT + DELTA
         # ========================================================
         chroma_stft = librosa.feature.chroma_stft(S=power_stft, sr=sr, n_fft=n_fft, hop_length=hop_length)
         _feature_stats(features, 'chroma_stft', chroma_stft)
+        delta_chroma_stft = librosa.feature.delta(chroma_stft)
+        _feature_stats(features, 'delta_chroma_stft', delta_chroma_stft)
+        del chroma_stft
+        del delta_chroma_stft
 
         # ========================================================
         # RMS
         # ========================================================
         rms = librosa.feature.rms(S=stft, frame_length=n_fft, hop_length=hop_length)
         _feature_stats(features, 'rms', rms)
+        del rms
+
+        # ========================================================
+        # HARMONIC / PERCUSSIVE SOURCE SEPARATION
+        # ========================================================
+        harmonic_stft, percussive_stft = librosa.decompose.hpss(stft)
+        harmonic_stft_sq = harmonic_stft**2
+        percussive_stft_sq = percussive_stft**2
+        del harmonic_stft
+        del percussive_stft
+        harmonic_rms = np.sqrt(np.mean(harmonic_stft_sq, axis=0, keepdims=True))
+        percussive_rms = np.sqrt(np.mean(percussive_stft_sq, axis=0, keepdims=True))
+        _feature_stats(features, 'harmonic_rms', harmonic_rms)
+        _feature_stats(features, 'percussive_rms', percussive_rms)
+        del harmonic_rms
+        del percussive_rms
+        
+        # Relative harmonic energy
+        harmonic_energy = np.sum(harmonic_stft_sq, axis=0)
+        percussive_energy = np.sum(percussive_stft_sq, axis=0)        
+        total_energy = harmonic_energy + percussive_energy
+        harmonic_ratio = (
+            harmonic_energy / np.maximum(total_energy, np.finfo(np.float32).eps)
+        )[np.newaxis, :]
+        percussive_ratio = (
+            percussive_energy / np.maximum(total_energy, np.finfo(np.float32).eps)
+        )[np.newaxis, :]
+        _feature_stats(features, 'harmonic_ratio', harmonic_ratio)
+        _feature_stats(features, 'percussive_ratio', percussive_ratio)
+        
+        del harmonic_stft_sq
+        del percussive_stft_sq
+        del harmonic_energy
+        del percussive_energy
+        del total_energy
+        del harmonic_ratio
+        del percussive_ratio
 
         # ========================================================
         # SPECTRAL CENTROID
         # ========================================================
         spectral_centroid = librosa.feature.spectral_centroid(S=stft, sr=sr)
         _feature_stats(features, 'spectral_centroid', spectral_centroid)
+        del spectral_centroid
 
         # ========================================================
         # SPECTRAL BANDWIDTH
         # ========================================================
         spectral_bandwidth = librosa.feature.spectral_bandwidth(S=stft, sr=sr)
         _feature_stats(features, 'spectral_bandwidth', spectral_bandwidth)
+        del spectral_bandwidth
+
+        # ========================================================
+        # SPECTRAL FLUX
+        # ========================================================
+        spectral_flux = np.sqrt(np.sum(np.diff(stft, axis=1) ** 2, axis=0, keepdims=True))
+        _feature_stats(features, 'spectral_flux', spectral_flux)
+        del spectral_flux
 
         # ========================================================
         # SPECTRAL CONTRAST
@@ -279,12 +347,14 @@ def compute_features(tid: int) -> pd.Series:
         spectral_contrast = librosa.feature.spectral_contrast(S=stft, sr=sr, n_bands=6)
         del stft  # no longer needed
         _feature_stats(features, 'spectral_contrast', spectral_contrast)
+        del spectral_contrast
 
         # ========================================================
         # SPECTRAL FLATNESS
         # ========================================================
         spectral_flatness = librosa.feature.spectral_flatness(S=power_stft)
         _feature_stats(features, 'spectral_flatness', spectral_flatness)
+        del spectral_flatness
 
         # ========================================================
         # SPECTRAL ROLLOFF
@@ -295,28 +365,25 @@ def compute_features(tid: int) -> pd.Series:
         _feature_stats(features, 'spectral_rolloff_50', spectral_rolloff_50)
         _feature_stats(features, 'spectral_rolloff_85', spectral_rolloff_85)
         _feature_stats(features, 'spectral_rolloff_95', spectral_rolloff_95)
+        del spectral_rolloff_50
+        del spectral_rolloff_85
+        del spectral_rolloff_95
 
         # ========================================================
-        # MEL SPECTROGRAM
+        # MFCC + DELTAS
         # ========================================================
         # Reuses power_stft rather than recomputing an STFT.
         mel = librosa.feature.melspectrogram(S=power_stft, sr=sr, hop_length=hop_length)
         del power_stft  # no longer needed
-
-        # ========================================================
-        # MFCC
-        # ========================================================
         mfcc = librosa.feature.mfcc(S=librosa.power_to_db(mel), sr=sr, n_mfcc=20)
-        del mel  # no longer needed
         _feature_stats(features, 'mfcc', mfcc)
-
-        # ========================================================
-        # DELTA MFCC
-        # ========================================================
         delta_mfcc = librosa.feature.delta(mfcc, order=1)
-        del mfcc  # no longer needed
         _feature_stats(features, 'delta_mfcc', delta_mfcc)
-        del delta_mfcc  # no longer needed
+        delta2_mfcc = librosa.feature.delta(mfcc, order=2)
+        _feature_stats(features, 'delta2_mfcc', delta2_mfcc)
+        del mfcc
+        del delta_mfcc
+        del delta2_mfcc
 
         # ========================================================
         # ONSET STRENGTH
@@ -324,6 +391,18 @@ def compute_features(tid: int) -> pd.Series:
         onset_strength = librosa.onset.onset_strength(y=x, sr=sr, hop_length=hop_length)
         _feature_stats(features, 'onset_strength', onset_strength)
 
+        # ========================================================
+        # TEMPOGRAM
+        # ========================================================        
+        tempogram = librosa.feature.tempogram(onset_envelope=onset_strength, sr=sr, hop_length=hop_length)
+        tempogram_mean = np.mean(tempogram, axis=1)
+        tempogram_std = np.std(tempogram, axis=1)
+        _feature_stats(features, 'tempogram_mean', tempogram_mean)
+        _feature_stats(features, 'tempogram_std', tempogram_std)
+        del tempogram
+        del tempogram_mean
+        del tempogram_std
+        
         # ========================================================
         # BEAT TRACKING
         # ========================================================
