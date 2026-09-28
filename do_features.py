@@ -112,7 +112,6 @@ def columns() -> pd.MultiIndex:
         percussive_ratio=1,
         onset_strength=1,
         tempogram_mean=1,
-        tempogram_std=1,
         beat_interval=1,
     )
 
@@ -396,12 +395,9 @@ def compute_features(tid: int) -> pd.Series:
         # ========================================================        
         tempogram = librosa.feature.tempogram(onset_envelope=onset_strength, sr=sr, hop_length=hop_length)
         tempogram_mean = np.mean(tempogram, axis=1)
-        tempogram_std = np.std(tempogram, axis=1)
         _feature_stats(features, 'tempogram_mean', tempogram_mean)
-        _feature_stats(features, 'tempogram_std', tempogram_std)
         del tempogram
         del tempogram_mean
-        del tempogram_std
         
         # ========================================================
         # BEAT TRACKING
