@@ -97,3 +97,52 @@ def get_audios(audio_dir: str | os.PathLike, track_ids: pd.Index) -> pd.DataFram
             'sample rate': samplerates}
     audio_df = pd.DataFrame(data, index=track_ids)
     return audio_df
+
+def df_to_latex(df: pd.DataFrame, ndigits: int = 3, caption: str = None, label: str = None) -> str:
+    """Convert any DataFrame to LaTeX table source and print it.
+ 
+    General-purpose wrapper around :meth:`pandas.DataFrame.to_latex`: not
+    tied to any particular table, so it works equally well on a feature
+    table, a timing summary, or anything else in a ``DataFrame``.
+ 
+    Args:
+        df: The table to convert.
+        ndigits: Number of digits to keep after the decimal point for
+            float columns.
+        caption: Optional LaTeX table caption.
+        label: Optional LaTeX ``\\label`` for cross-referencing.
+ 
+    Returns:
+        The LaTeX source of the table, as also printed to stdout.
+    """
+    latex = df.to_latex(float_format='%.{}f'.format(ndigits), caption=caption, label=label)
+    print(latex)
+    return latex
+
+
+def txt_to_latex(path: Path, ndigits: int = 3, caption: str = None, label: str = None, **read_csv_kwargs) -> str:
+    """Load a DataFrame from a whitespace-formatted .txt file and convert it to LaTeX.
+ 
+    Reads a text file holding a table in the format produced by
+    ``print(df)`` (columns separated by whitespace, row labels in the
+    first column), such as ``TIMING_STATS_PATH``, then delegates to
+    :func:`df_to_latex`.
+ 
+    Args:
+        path: Path to the .txt file to read.
+        ndigits: Number of digits to keep after the decimal point for
+            float columns.
+        caption: Optional LaTeX table caption.
+        label: Optional LaTeX ``\\label`` for cross-referencing.
+        **read_csv_kwargs: Extra keyword arguments forwarded to
+            :func:`pandas.read_csv` (e.g. ``sep`` or ``index_col``, if the
+            file's layout differs from the default whitespace-separated,
+            first-column-as-index format).
+ 
+    Returns:
+        The LaTeX source of the table, as also printed to stdout.
+    """
+    read_csv_kwargs.setdefault('sep', r'\s+')
+    read_csv_kwargs.setdefault('index_col', 0)
+    df = pd.read_csv(path, **read_csv_kwargs)
+    return df_to_latex(df, ndigits=ndigits, caption=caption, label=label)
