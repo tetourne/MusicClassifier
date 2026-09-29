@@ -32,7 +32,7 @@ FEATURES_PATH = DATA_DIR / 'fma_metadata' / 'myfeatures.csv'
 FAILED_TIDS_PATH = DATA_DIR / 'fma_metadata' / 'failed_tids.npy'
 
 # Used for test and debug
-DEBUG_LIMIT = 100  # max number of files to load. Set to None if no use
+DEBUG_LIMIT = None  # max number of files to load. Set to None if no use
 DEBUG_SUBSET = 'small'
 
 
@@ -477,7 +477,7 @@ def main() -> None:
                     # This can be very costly since it rewrites the whole file
                     # again each time. If run time is too long, increase the
                     # checkpoint interval, or only write the new rows to the file.
-                    save(features, 10)
+                    save(features, 8)
                 if row.isnull().all():
                     print(f"Failed to extract {row.name}.")
                     failed_tids.append(row.name)
@@ -486,8 +486,8 @@ def main() -> None:
     np.save(FAILED_TIDS_PATH, failed_tids)
     if len(failed_tids) > 0:
         print(f"Data extraction failed for {len(failed_tids)} audios, corresponding to these audio IDs:\n{failed_tids}")
-    save(features, 10)
-    test(features, 10)
+    save(features, 8)
+    test(features, 8)
 
 
 if __name__ == "__main__":
