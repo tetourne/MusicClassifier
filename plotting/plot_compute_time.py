@@ -1,0 +1,30 @@
+import os
+import pandas as pd
+import numpy as np
+from matplotlib import pyplot as plt
+from pathlib import Path
+
+plt.rcParams.update({'font.size': 14,
+                     'font.weight':700}) ## 400 for normal font
+
+DATA_DIR = Path(os.environ.get('MUSIC_DATA_DIR', '/run/media/thomas/Data/Documents/Database'))
+TIMINGS_PATH = DATA_DIR / 'fma_metadata' / 'timings.df'
+start = 2
+end = start + 8
+
+timings_df = pd.read_pickle(TIMINGS_PATH)
+summary = timings_df.agg(['mean', 'std', 'min', 'max']).T.sort_values('mean', ascending=False)
+print(summary.to_latex(float_format='%.{}f'.format(3)))
+
+data = summary[start:end]['mean']
+err = summary[start:end]['std']
+ylabel = 'compute time (s)'
+# plt.errorbar(data.index, data.values, yerr=err, fmt='o')
+plt.figure(figsize=(12,8))
+ax = data.plot(kind='bar', yerr=err, alpha=0.7, rot=45)
+plt.ylabel(ylabel, weight=700)
+plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha="right", rotation_mode="anchor") 
+
+plt.grid()
+plt.tight_layout()
+plt.show()
