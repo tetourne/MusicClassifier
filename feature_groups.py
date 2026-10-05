@@ -7,17 +7,16 @@ have a single column ('tempo', 'value', '01').
 Everything here works on the MultiIndex directly, so the same helpers can
 be reused later for group ablation / permutation importance.
 """
+from collections.abc import Iterable
+
 import numpy as np
 import pandas as pd
 
-ALL_STATS = ('mean', 'std', 'skew', 'kurtosis', 'median', 'min', 'max', '10th', '90th')
-SCALAR_FEATURES = ('tempo', 'beat_rate')
-
 # Statistics used for every feature of the compact set (same for all -> fair comparison).
-UNIFORM_STATS = ('mean', 'std', 'skew', 'kurtosis', 'median')
+UNIFORM_STATS: tuple[str, ...] = ('mean', 'std', 'skew', 'kurtosis', 'median')
 
 # One or two representatives per musical dimension.
-COMPACT_FEATURES = (
+COMPACT_FEATURES: tuple[str, ...] = (
     # timbre
     'mfcc',
     # spectral shape
@@ -31,15 +30,28 @@ COMPACT_FEATURES = (
     'onset_strength', 'tempo', 'beat_rate',
 )
 
+# Feature-set name -> keyword arguments of select_columns (no arguments = all columns).
+# This is the single place where the feature-set names are defined.
+FEATURE_SET_SPECS: dict[str, dict] = {
+    'compact': {'features': COMPACT_FEATURES, 'stats': UNIFORM_STATS},
+    'full': {},
+}
 
-def select_columns(columns: pd.MultiIndex, features=None, stats=None) -> pd.MultiIndex:
+
+def select_columns(columns: pd.MultiIndex,
+                   features: Iterable[str] | None = None,
+                   stats: Iterable[str] | None = None) -> pd.MultiIndex:
     """Return the subset of ``columns`` matching the given features / statistics.
 
     Args:
         columns: The MultiIndex of the feature table.
         features: Feature names to keep (level 0). ``None`` keeps all.
         stats: Statistics to keep (level 1). ``None`` keeps all. The scalar
-            features ('value' statistic) are never removed by this filter.
+            features (whose statistic is ``'value'``) are never removed by
+            this filter.
+
+    Returns:
+        The selected columns, in their original order.
     """
     feat = np.asarray(columns.get_level_values(0))
     stat = np.asarray(columns.get_level_values(1))
@@ -51,9 +63,13 @@ def select_columns(columns: pd.MultiIndex, features=None, stats=None) -> pd.Mult
     return columns[keep]
 
 
-def build_feature_sets(columns: pd.MultiIndex) -> dict:
-    """The two feature sets compared in the model-selection step."""
-    return {
-        'compact': select_columns(columns, COMPACT_FEATURES, UNIFORM_STATS),
-        'full': columns,
-    }
+def build_feature_sets(columns: pd.MultiIndex) -> dict[str, pd.MultiIndex]:
+    """Build the feature sets compared in the model-selection step.
+
+    Args:
+        columns: The MultiIndex of the feature table.
+
+    Returns:
+        A dict mapping each name of ``FEATURE_SET_SPECS`` to its columns.
+    """
+    return {name: select_columns(columns, **spec) for name, spec in FEATURE_SET_SPECS.items()}
