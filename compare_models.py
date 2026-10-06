@@ -493,8 +493,7 @@ def main() -> None:
     data = load_data(args.data_dir)
     all_sets = build_feature_sets(data.X_dev.columns)
     fsets = {name: all_sets[name] for name in args.feature_sets}
-    logging.info({name: len(cols) for name, cols in fsets.items()}, "columns per feature set\n")
-
+    logging.info(f"Columns per feature set: { {name: len(cols) for name, cols in fsets.items()} }")
     run_comparison(data, fsets, args.models, args.out_dir, seeds=args.seeds, scaler=args.scaler,
                    n_folds=args.n_folds, n_jobs=args.n_jobs, do_test=args.test,
                    save_models=args.save_models)
