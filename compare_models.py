@@ -484,10 +484,10 @@ def main() -> None:
     if len(set(args.seeds)) != len(args.seeds):
         ap.error("--seeds must not contain duplicates")
 
-    print(args)
-    logging.info(f"Seeds used are {args.seeds}.")
+    logging.info(f"The code is run with: {args}.")
+    logging.info(f"Seeds used: {args.seeds}.")
     logging.info(f"Results will be saved in {args.out_dir}.")
-    logging.info(f"The scaler used is {args.scaler}.")
+    logging.info(f"The scaler used: {args.scaler}.")
     logging.info(f"Feature sets: {FEATURE_SET_SPECS}.")
 
     data = load_data(args.data_dir)
