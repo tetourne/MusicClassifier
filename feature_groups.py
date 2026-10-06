@@ -13,7 +13,8 @@ import numpy as np
 import pandas as pd
 
 # Statistics used for every feature of the compact set (same for all -> fair comparison).
-UNIFORM_STATS: tuple[str, ...] = ('mean', 'std', 'skew', 'kurtosis', 'median')
+# UNIFORM_STATS: tuple[str, ...] = ('mean', 'std', 'skew', 'kurtosis', 'median')
+UNIFORM_STATS: tuple[str, ...] = ('mean', 'std', 'skew', 'kurtosis')
 
 # One or two representatives per musical dimension.
 COMPACT_FEATURES: tuple[str, ...] = (
@@ -29,11 +30,22 @@ COMPACT_FEATURES: tuple[str, ...] = (
     # rhythm
     'onset_strength', 'tempo', 'beat_rate',
 )
+MORE_COMPACT_FEATURES: tuple[str, ...] = (
+    # timbre
+    'mfcc',
+    # spectral shape
+    'spectral_centroid', 'spectral_bandwidth', 'spectral_rolloff_85',
+    'spectral_contrast', 'spectral_flatness',
+    # energy / percussive
+    'rms', 'zcr',
+    # rhythm
+    'tempo',
+)
 
 # Feature-set name -> keyword arguments of select_columns (no arguments = all columns).
 # This is the single place where the feature-set names are defined.
 FEATURE_SET_SPECS: dict[str, dict] = {
-    'compact': {'features': COMPACT_FEATURES, 'stats': UNIFORM_STATS},
+    'compact': {'features': MORE_COMPACT_FEATURES, 'stats': UNIFORM_STATS},
     'full': {},
 }
 
