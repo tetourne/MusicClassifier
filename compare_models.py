@@ -316,8 +316,18 @@ def summarize(fold_scores: pd.DataFrame) -> pd.DataFrame:
                     f1_mean=('f1', 'mean'), f1_std=('f1', 'std'),
                     fit_time_s=('fit_time', 'mean'), n_iter=('n_iter', 'mean'))
                .reset_index())
-    per_seed = fold_scores.groupby(SUMMARY_KEYS + ['seed'], sort=False).acc.mean()
-    seed_std = per_seed.groupby(level=SUMMARY_KEYS, sort=False).std().rename('acc_seed_std')
+    per_seed = (fold_scores
+                .groupby(SUMMARY_KEYS + ['seed'], sort=False)
+                .agg(
+                    acc=('acc', 'mean'),
+                    f1=('f1', 'mean')
+                ))
+    seed_std = (per_seed
+                .groupby(level=SUMMARY_KEYS, sort=False)
+                .agg(
+                    acc_seed_std=('acc', 'std'),
+                    f1_seed_std=('f1', 'std')
+                ))
     columns = SUMMARY_KEYS + ['acc_mean', 'acc_std', 'acc_seed_std', 'f1_mean', 'f1_std',
                               'fit_time_s', 'n_iter']
     return summary.join(seed_std, on=SUMMARY_KEYS)[columns]
