@@ -67,7 +67,7 @@ SEED_KEYS = ('folds', 'scaler', 'rf', 'et', 'hgb', 'mlp')
 def setup_loggin(log_file):
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s",
+        format="%(message)s",
         handlers=[
             logging.StreamHandler(),              # terminal
             logging.FileHandler(log_file),      # file
@@ -189,7 +189,7 @@ def build_models(n_features: int, seeds: dict[str, int],
 
     # After scaling, features have unit variance, so SVC's gamma='scale' is 1/n_features.
     # The grid is expressed relative to that so it is comparable across feature sets.
-    gammas = [m / n_features for m in (0.03, 0.1, 0.5, 1.0, 2.0, 10)]
+    gammas = [m / n_features for m in (0.3, 0.4, 0.5, 0.6, 0.7)]
 
     # Second-round grids, refined around the best values of the first round (every grid
     # still contains the first-round best configuration). In the first round, nearly all
@@ -202,32 +202,34 @@ def build_models(n_features: int, seeds: dict[str, int],
                  'clf__weights': ['uniform', 'distance'],
                  'clf__p': [1, 2]}),
         'svm': (pipe(SVC(kernel='rbf'), True),
-                {'clf__C': [0.1, 0.25, 0.5, 1, 2, 10, 100],
+                {'clf__C': [0.8, 1, 1.2, 1.5],
                  'clf__gamma': gammas}),
-        'rf': (pipe(RandomForestClassifier(n_estimators=300, n_jobs=1,
+        'rf': (pipe(RandomForestClassifier(n_jobs=1,
                                            random_state=seeds['rf']), False),
-               {'clf__max_features': ['sqrt', 0.1, 0.3, 1],
-                'clf__min_samples_leaf': [1, 3, 6, 12],
-                'clf__class_weight': [None, "balanced"]}),
-        'et': (pipe(ExtraTreesClassifier(n_estimators=300, n_jobs=1,
+               {'clf__max_features': [0.2, 0.3, 0.5],
+                'clf__min_samples_leaf': [1, 2, 5],
+                'clf__n_estimators':[300, 500],
+                'clf__class_weight': ["balanced"]}),
+        'et': (pipe(ExtraTreesClassifier(n_jobs=1,
                                            random_state=seeds['et']), False),
-               {'clf__max_features': ['sqrt', 0.1, 0.3, 0.7],
-                'clf__min_samples_leaf': [1, 3, 6, 12],
-                'clf__class_weight': [None, "balanced"]}),
+               {'clf__max_features': [0.5, 0.7, 0.9, 1],
+                'clf__min_samples_leaf': [1, 2, 5],
+                'clf__n_estimators':[300, 500],
+                'clf__class_weight': ["balanced"]}),
         # learning_rate is fixed: with early stopping, a lower rate mostly trades time for
         # marginal gains, so the grid explores the regularization parameters instead.
-        'hgb': (pipe(HistGradientBoostingClassifier(max_iter=500,
+        'hgb': (pipe(HistGradientBoostingClassifier(max_iter=300,
                                                     early_stopping=False,
                                                     validation_fraction=0.1,
                                                     random_state=seeds['hgb']), False),
-                {'clf__learning_rate': [0.03, 0.05, 0.1],
-                 'clf__max_leaf_nodes': [7, 15, 31, 63],
-                 'clf__min_samples_leaf': [10, 20, 50],
-                 'clf__l2_regularization': [0.0, 5.0]}),
+                {'clf__learning_rate': [0.04, 0.05, 0.08],
+                 'clf__max_leaf_nodes': [17, 31, 43],
+                 'clf__min_samples_leaf': [30, 50, 70],
+                 'clf__l2_regularization': [0.0, 1]}),
         'mlp': (pipe(MLPClassifier(max_iter=300, early_stopping=False,
                                    random_state=seeds['mlp']), True),
-                {'clf__hidden_layer_sizes': [(62,), (128,), (128,64), (256,), (256, 128)],
-                 'clf__alpha': [1e-5, 1e-3, 1.0, 3.0, 10.0]}),
+                {'clf__hidden_layer_sizes': [(128,64), (256,), (256, 128), (512,), (512, 128)],
+                 'clf__alpha': [1.0, 2.0, 3.0, 4.0, 5.0]}),
     }
 
 
