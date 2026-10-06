@@ -480,18 +480,19 @@ def main() -> None:
     ap.add_argument('--save-models', action='store_true',
                     help="refit the best configuration of each (feature set, model) on the whole development set and save it")
     args = ap.parse_args()
-    setup_loggin(args.out_dir+'/logs.txt')
+    setup_loggin(args.out_dir / 'logs.txt')
     if len(set(args.seeds)) != len(args.seeds):
         ap.error("--seeds must not contain duplicates")
 
+    print(args)
     logging.info(f"Seeds used are {args.seeds}.")
     logging.info(f"Results will be saved in {args.out_dir}.")
     logging.info(f"The scaler used is {args.scaler}.")
+    logging.info(f"Feature sets: {FEATURE_SET_SPECS}.")
 
     data = load_data(args.data_dir)
     all_sets = build_feature_sets(data.X_dev.columns)
     fsets = {name: all_sets[name] for name in args.feature_sets}
-    logging.info("Feature sets are: ", {name, FEATURE_SET_SPECS[name] for name in args.feature_sets})
     logging.info({name: len(cols) for name, cols in fsets.items()}, "columns per feature set\n")
 
     run_comparison(data, fsets, args.models, args.out_dir, seeds=args.seeds, scaler=args.scaler,
