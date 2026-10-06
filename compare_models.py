@@ -15,16 +15,21 @@ Protocol
   training folds only (no leakage).
 * Fold models are discarded right after scoring: only scores and out-of-fold
   predictions are kept. Use --save-models to keep the final (refit) models.
+* --seeds repeats the whole cross-validation once per master seed. Each seed
+  changes both the fold split and the seeds of the stochastic models, so the
+  spread across seeds measures how much the results depend on those choices.
 
 Usage
 -----
     python compare_models.py                       # both sets, all models
     python compare_models.py --feature-sets compact --models svm rf
+    python compare_models.py --models svm hgb --seeds 0 1 2   # repeated runs for the finalists
     python compare_models.py --save-models --test  # final step, once
 """
 import argparse
 import os
 import time
+import logging
 from pathlib import Path
 from typing import NamedTuple
 
@@ -35,7 +40,7 @@ import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed, dump
 from sklearn.base import clone
-from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
+from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier, ExtraTreesClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (ConfusionMatrixDisplay, accuracy_score,
@@ -50,10 +55,24 @@ from sklearn.svm import SVC
 from feature_groups import FEATURE_SET_SPECS, build_feature_sets
 
 DEFAULT_DATA_DIR = os.environ.get('MUSIC_DATA_DIR', '/run/media/thomas/Data/Documents/Database')
-MODEL_NAMES = ('logreg', 'knn', 'svm', 'rf', 'hgb', 'mlp')
+MODEL_NAMES = ('logreg', 'knn', 'svm', 'rf', 'et', 'hgb', 'mlp')
 # Components that use randomness. Each one gets its own seed derived from --seed.
 # (logreg/lbfgs, kNN and SVM are deterministic.)
-SEED_KEYS = ('folds', 'scaler', 'rf', 'hgb', 'mlp')
+SEED_KEYS = ('folds', 'scaler', 'rf', 'et', 'hgb', 'mlp')
+
+
+# ---------------------------------------------------------------------------
+# Logger config
+# ---------------------------------------------------------------------------
+def setup_loggin(log_file):
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s",
+        handlers=[
+            logging.StreamHandler(),              # terminal
+            logging.FileHandler(log_file),      # file
+        ]
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -83,14 +102,14 @@ def load_data(data_dir: str | os.PathLike) -> Data:
     import utils  # imported here because it pulls in librosa
 
     meta = Path(data_dir) / 'fma_metadata'
-    print(f"Reading data from {meta}...")
+    logging.info(f"Reading data from {meta}...")
     tracks = utils.load(meta / 'tracks.csv')
     features = utils.load(meta / 'myfeatures.csv')
 
     features = features.replace([np.inf, -np.inf], np.nan)
     failed = features.index[features.isna().all(axis=1)]
     if len(failed) > 0:
-        print(f"Dropping {len(failed)} tracks whose feature extraction failed.")
+        logging.info(f"Dropping {len(failed)} tracks whose feature extraction failed.")
     usable = features.index.difference(failed)
 
     small = tracks['set', 'subset'] <= 'small'
@@ -117,11 +136,11 @@ def load_data(data_dir: str | os.PathLike) -> Data:
 
     shared = np.intersect1d(data.groups_dev, artist.loc[test_ids].to_numpy())
     n_nan = int(data.X_dev.isna().sum().sum())
-    print(f"{len(data.y_dev)} development tracks ({len(np.unique(data.groups_dev))} artists), "
+    logging.info(f"{len(data.y_dev)} development tracks ({len(np.unique(data.groups_dev))} artists), "
           f"{len(data.y_test)} test tracks, {len(encoder.classes_)} classes: {list(encoder.classes_)}")
-    print(f"{features.shape[1]} feature columns; {n_nan} NaN cells in the development set "
+    logging.info(f"{features.shape[1]} feature columns; {n_nan} NaN cells in the development set "
           f"(imputed with the training median inside the pipeline).")
-    print(f"Artists present in both development and test sets: {len(shared)} (should be 0).")
+    logging.info(f"Artists present in both development and test sets: {len(shared)} (should be 0).")
     return data
 
 
@@ -170,26 +189,45 @@ def build_models(n_features: int, seeds: dict[str, int],
 
     # After scaling, features have unit variance, so SVC's gamma='scale' is 1/n_features.
     # The grid is expressed relative to that so it is comparable across feature sets.
-    gammas = [m / n_features for m in (0.3, 1.0, 3.0)]
+    gammas = [m / n_features for m in (0.03, 0.1, 0.5, 1.0, 2.0, 10)]
 
+    # Second-round grids, refined around the best values of the first round (every grid
+    # still contains the first-round best configuration). In the first round, nearly all
+    # models preferred the most regularized value on offer, so the grids extend that way.
     return {
         'logreg': (pipe(LogisticRegression(max_iter=2000), True),
-                   {'clf__C': [0.01, 0.1, 1.0]}),
+                   {'clf__C': [0.001, 0.003, 0.01, 0.03, 0.1, 0.3, 1, 3, 10, 100]}),
         'knn': (pipe(KNeighborsClassifier(), True),
-                {'clf__n_neighbors': [5, 15, 30], 'clf__weights': ['uniform', 'distance']}),
+                {'clf__n_neighbors': [30, 50, 100],
+                 'clf__weights': ['uniform', 'distance'],
+                 'clf__p': [1, 2]}),
         'svm': (pipe(SVC(kernel='rbf'), True),
-                {'clf__C': [1, 10, 100], 'clf__gamma': gammas}),
+                {'clf__C': [0.1, 0.25, 0.5, 1, 2, 10, 100],
+                 'clf__gamma': gammas}),
         'rf': (pipe(RandomForestClassifier(n_estimators=300, n_jobs=1,
                                            random_state=seeds['rf']), False),
-               {'clf__max_features': ['sqrt', 0.1], 'clf__min_samples_leaf': [1, 3]}),
-        'hgb': (pipe(HistGradientBoostingClassifier(max_iter=300, early_stopping=True,
+               {'clf__max_features': ['sqrt', 0.1, 0.3, 1],
+                'clf__min_samples_leaf': [1, 3, 6, 12],
+                'clf__class_weight': [None, "balanced"]}),
+        'et': (pipe(ExtraTreesClassifier(n_estimators=300, n_jobs=1,
+                                           random_state=seeds['et']), False),
+               {'clf__max_features': ['sqrt', 0.1, 0.3, 0.7],
+                'clf__min_samples_leaf': [1, 3, 6, 12],
+                'clf__class_weight': [None, "balanced"]}),
+        # learning_rate is fixed: with early stopping, a lower rate mostly trades time for
+        # marginal gains, so the grid explores the regularization parameters instead.
+        'hgb': (pipe(HistGradientBoostingClassifier(max_iter=500,
+                                                    early_stopping=False,
                                                     validation_fraction=0.1,
                                                     random_state=seeds['hgb']), False),
-                {'clf__learning_rate': [0.05, 0.1], 'clf__max_leaf_nodes': [15, 31]}),
-        'mlp': (pipe(MLPClassifier(max_iter=300, early_stopping=True,
+                {'clf__learning_rate': [0.03, 0.05, 0.1],
+                 'clf__max_leaf_nodes': [7, 15, 31, 63],
+                 'clf__min_samples_leaf': [10, 20, 50],
+                 'clf__l2_regularization': [0.0, 5.0]}),
+        'mlp': (pipe(MLPClassifier(max_iter=300, early_stopping=False,
                                    random_state=seeds['mlp']), True),
-                {'clf__hidden_layer_sizes': [(128,), (256, 128)],
-                 'clf__alpha': [1e-4, 1e-2, 1.0]}),
+                {'clf__hidden_layer_sizes': [(62,), (128,), (128,64), (256,), (256, 128)],
+                 'clf__alpha': [1e-5, 1e-3, 1.0, 3.0, 10.0]}),
     }
 
 
@@ -206,14 +244,22 @@ def format_params(params: dict) -> str:
 # Cross-validation
 # ---------------------------------------------------------------------------
 def _fit_predict(pipeline: Pipeline, params: dict, X: np.ndarray, y: np.ndarray,
-                 train_idx: np.ndarray, val_idx: np.ndarray) -> tuple[np.ndarray, float]:
-    """Fit one configuration on one training fold. Returns (predictions on the
-    validation fold, fit time in seconds). The fitted model is discarded."""
+                 train_idx: np.ndarray, val_idx: np.ndarray) -> tuple[np.ndarray, float, float]:
+    """Fit one configuration on one training fold.
+
+    Returns:
+        (predictions on the validation fold, fit time in seconds, number of
+        iterations actually run). The iteration count is only defined for the
+        iterative models (HGB, MLP), NaN otherwise; comparing it with ``max_iter``
+        shows whether the iteration cap was reached. The fitted model is discarded.
+    """
     model = clone(pipeline).set_params(**params)
     t0 = time.perf_counter()
     model.fit(X[train_idx], y[train_idx])
     fit_time = time.perf_counter() - t0
-    return model.predict(X[val_idx]), fit_time
+    n_iter = getattr(model[-1], 'n_iter_', np.nan)
+    n_iter = float(n_iter) if np.ndim(n_iter) == 0 else np.nan
+    return model.predict(X[val_idx]), fit_time, n_iter
 
 
 def cross_validate_grid(pipeline: Pipeline, grid: dict[str, list], X: np.ndarray, y: np.ndarray,
@@ -234,7 +280,7 @@ def cross_validate_grid(pipeline: Pipeline, grid: dict[str, list], X: np.ndarray
 
     Returns:
         configs: the hyperparameter dicts, indexed by config_id.
-        rows: one dict per fit (config_id, config, fold, acc, f1, fit_time).
+        rows: one dict per fit (config_id, config, fold, acc, f1, fit_time, n_iter).
         oof: array (n_configs, n_samples) of out-of-fold predictions.
     """
     configs = list(ParameterGrid(grid))
@@ -244,29 +290,42 @@ def cross_validate_grid(pipeline: Pipeline, grid: dict[str, list], X: np.ndarray
 
     oof = np.empty((len(configs), len(y)), dtype=np.int64)
     rows = []
-    for (c, f), (pred, fit_time) in zip(tasks, outputs):
+    for (c, f), (pred, fit_time, n_iter) in zip(tasks, outputs):
         val_idx = folds[f][1]
         oof[c, val_idx] = pred
         rows.append({'config_id': c, 'config': format_params(configs[c]), 'fold': f,
                      'acc': accuracy_score(y[val_idx], pred),
                      'f1': f1_score(y[val_idx], pred, average='macro'),
-                     'fit_time': fit_time})
+                     'fit_time': fit_time, 'n_iter': n_iter})
     return configs, rows, oof
 
 
+SUMMARY_KEYS = ['feature_set', 'n_features', 'model', 'config_id', 'config']
+
+
 def summarize(fold_scores: pd.DataFrame) -> pd.DataFrame:
-    """Aggregate per-fold scores: one row per (feature set, model, configuration)."""
-    return (fold_scores
-            .groupby(['feature_set', 'n_features', 'model', 'config_id', 'config'], sort=False)
-            .agg(acc_mean=('acc', 'mean'), acc_std=('acc', 'std'),
-                 f1_mean=('f1', 'mean'), f1_std=('f1', 'std'),
-                 fit_time_s=('fit_time', 'mean'))
-            .reset_index())
+    """Aggregate the scores: one row per (feature set, model, configuration).
+
+    ``acc_mean`` is the mean accuracy over all (seed, fold) fits and ``acc_std`` the
+    standard deviation of the single-fit accuracies. ``acc_seed_std`` is the standard
+    deviation, across seeds, of the per-seed mean accuracy (NaN with a single seed).
+    ``n_iter`` is the mean number of iterations (HGB and MLP only).
+    """
+    summary = (fold_scores.groupby(SUMMARY_KEYS, sort=False)
+               .agg(acc_mean=('acc', 'mean'), acc_std=('acc', 'std'),
+                    f1_mean=('f1', 'mean'), f1_std=('f1', 'std'),
+                    fit_time_s=('fit_time', 'mean'), n_iter=('n_iter', 'mean'))
+               .reset_index())
+    per_seed = fold_scores.groupby(SUMMARY_KEYS + ['seed'], sort=False).acc.mean()
+    seed_std = per_seed.groupby(level=SUMMARY_KEYS, sort=False).std().rename('acc_seed_std')
+    columns = SUMMARY_KEYS + ['acc_mean', 'acc_std', 'acc_seed_std', 'f1_mean', 'f1_std',
+                              'fit_time_s', 'n_iter']
+    return summary.join(seed_std, on=SUMMARY_KEYS)[columns]
 
 
 def best_configs(summary: pd.DataFrame) -> pd.DataFrame:
-    """Best configuration (highest mean accuracy) of each (feature set, model)."""
-    idx = summary.groupby(['feature_set', 'model'], sort=False).acc_mean.idxmax()
+    """Best configuration (highest mean F1 score) of each (feature set, model)."""
+    idx = summary.groupby(['feature_set', 'model'], sort=False).f1_mean.idxmax()
     return summary.loc[idx]
 
 
@@ -276,8 +335,8 @@ def best_configs(summary: pd.DataFrame) -> pd.DataFrame:
 def report_winner(y: np.ndarray, oof_pred: np.ndarray, classes: np.ndarray,
                   title: str, path: Path) -> None:
     """Print a per-class report and save a normalized confusion matrix (out-of-fold predictions)."""
-    print(f"\n--- {title} (out-of-fold predictions) ---")
-    print(classification_report(y, oof_pred, target_names=classes, digits=3))
+    logging.info(f"\n--- {title} (out-of-fold predictions) ---")
+    logging.info(classification_report(y, oof_pred, target_names=classes, digits=3))
     fig, ax = plt.subplots(figsize=(7, 6))
     ConfusionMatrixDisplay.from_predictions(
         y, oof_pred, display_labels=classes, normalize='true',
@@ -292,16 +351,18 @@ def report_winner(y: np.ndarray, oof_pred: np.ndarray, classes: np.ndarray,
 # Experiment
 # ---------------------------------------------------------------------------
 def run_comparison(data: Data, fsets: dict[str, pd.MultiIndex], model_names: list[str],
-                   out_dir: Path, seed: int, scaler: str, n_folds: int, n_jobs: int,
+                   out_dir: Path, seeds: list[int], scaler: str, n_folds: int, n_jobs: int,
                    do_test: bool, save_models: bool) -> None:
-    """Cross-validate every model on every feature set and write the results to ``out_dir``.
+    """Cross-validate every model on every feature set, once per seed, and write the results to ``out_dir``.
 
     Args:
         data: Development and test sets.
         fsets: Feature-set name -> selected columns.
         model_names: Names from ``MODEL_NAMES`` to run.
         out_dir: Output directory (created if needed).
-        seed: Master seed (see :func:`derive_seeds`).
+        seeds: Master seeds (see :func:`derive_seeds`). The whole cross-validation is
+            repeated for each one, with a different fold split and different model seeds.
+            The reports and the final refit use the first seed.
         scaler: 'standard' or 'quantile'.
         n_folds: Number of cross-validation folds.
         n_jobs: Number of worker processes (-1 = all cores).
@@ -310,58 +371,66 @@ def run_comparison(data: Data, fsets: dict[str, pd.MultiIndex], model_names: lis
             on the whole development set and save it.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
-    seeds = derive_seeds(seed)
-
-    # Folds are built once and reused for every model / feature set (paired comparison).
-    cv = StratifiedGroupKFold(n_splits=n_folds, shuffle=True, random_state=seeds['folds'])
-    folds = list(cv.split(data.X_dev, data.y_dev, data.groups_dev))
 
     fold_rows: list[dict] = []
     configs_by_key: dict[tuple[str, str], list[dict]] = {}
-    oof_by_key: dict[tuple[str, str], np.ndarray] = {}
+    oof_by_key: dict[tuple[str, str], np.ndarray] = {}  # out-of-fold predictions, first seed only
 
-    for fs_name, cols in fsets.items():
-        X = data.X_dev.loc[:, cols].to_numpy(np.float32)
-        models = build_models(len(cols), seeds, scaler)
+    for seed in seeds:
+        component_seeds = derive_seeds(seed)
 
-        for name in model_names:
-            pipeline, grid = models[name]
-            t0 = time.perf_counter()
-            configs, rows, oof = cross_validate_grid(pipeline, grid, X, data.y_dev, folds, n_jobs)
-            elapsed = time.perf_counter() - t0
+        # Folds are built once per seed and reused for every model / feature set (paired comparison).
+        cv = StratifiedGroupKFold(n_splits=n_folds, shuffle=True,
+                                  random_state=component_seeds['folds'])
+        folds = list(cv.split(data.X_dev, data.y_dev, data.groups_dev))
 
-            rows = [{'feature_set': fs_name, 'n_features': len(cols), 'model': name, **r}
-                    for r in rows]
-            fold_rows.extend(rows)
-            configs_by_key[(fs_name, name)] = configs
-            oof_by_key[(fs_name, name)] = oof
+        for fs_name, cols in fsets.items():
+            X = data.X_dev.loc[:, cols].to_numpy(np.float32)
+            models = build_models(len(cols), component_seeds, scaler)
 
-            best = best_configs(summarize(pd.DataFrame(rows))).iloc[0]
-            print(f"[{fs_name:7s} | {len(cols):4d} feats] {name:6s} "
-                  f"acc={best.acc_mean:.3f}±{best.acc_std:.3f}  macro-F1={best.f1_mean:.3f}  "
-                  f"({elapsed:.0f}s, {len(configs)} configs x {n_folds} folds)  {best.config}")
+            for name in model_names:
+                pipeline, grid = models[name]
+                t0 = time.perf_counter()
+                configs, rows, oof = cross_validate_grid(pipeline, grid, X, data.y_dev,
+                                                         folds, n_jobs)
+                elapsed = time.perf_counter() - t0
 
-    # Raw per-fold scores and per-configuration summary: every trained model is in there.
+                rows = [{'seed': seed, 'feature_set': fs_name, 'n_features': len(cols),
+                         'model': name, **r} for r in rows]
+                fold_rows.extend(rows)
+                configs_by_key[(fs_name, name)] = configs
+                if seed == seeds[0]:
+                    oof_by_key[(fs_name, name)] = oof
+
+                best = best_configs(summarize(pd.DataFrame(rows))).iloc[0]
+                logging.info(f"[seed {seed} | {fs_name:7s} | {len(cols):4d} feats] {name:6s} "
+                      f"acc={best.acc_mean:.3f}±{best.acc_std:.3f}  macro-F1={best.f1_mean:.3f}  "
+                      f"({elapsed:.0f}s, {len(configs)} configs x {n_folds} folds)  {best.config}")
+
+                # Safety copy: a crash during a long run does not lose the finished models.
+                pd.DataFrame(fold_rows).to_csv(out_dir / 'fold_scores.csv', index=False)
+
+    # Raw per-fit scores and per-configuration summary: every trained model is in there.
     fold_scores = pd.DataFrame(fold_rows)
     summary = summarize(fold_scores)
-    fold_scores.to_csv(out_dir / 'fold_scores.csv', index=False)
     summary.to_csv(out_dir / 'config_scores.csv', index=False)
 
     best = best_configs(summary)
     spread = summary.groupby(['feature_set', 'model'], sort=False).acc_mean.agg(
         acc_worst='min', n_configs='size')
     table = best.join(spread, on=['feature_set', 'model'])
-    print("\n=== Best configuration per model (cross-validated; acc_worst = worst config of that model) ===")
-    print(table.sort_values(['feature_set', 'acc_mean'], ascending=[True, False])
-          [['feature_set', 'n_features', 'model', 'acc_mean', 'acc_std', 'f1_mean',
-            'acc_worst', 'n_configs', 'fit_time_s', 'config']]
+    logging.info("\n=== Best configuration per model (cross-validated; acc_worst = worst config of that model) ===")
+    logging.info(table.sort_values(['feature_set', 'acc_mean'], ascending=[True, False])
+          [['feature_set', 'n_features', 'model', 'acc_mean', 'acc_std', 'acc_seed_std',
+            'f1_mean', 'acc_worst', 'n_configs', 'fit_time_s', 'n_iter', 'config']]
+          .dropna(axis=1, how='all')
           .to_string(index=False, float_format='%.3f'))
 
     winners = best.loc[best.groupby('feature_set', sort=False).acc_mean.idxmax()]
     for row in winners.itertuples():
         oof_pred = oof_by_key[(row.feature_set, row.model)][row.config_id]
         report_winner(data.y_dev, oof_pred, data.encoder.classes_,
-                      f'{row.feature_set} / {row.model}',
+                      f'{row.feature_set} / {row.model} (seed {seeds[0]})',
                       out_dir / f'confusion_{row.feature_set}_{row.model}.png')
 
     if not (save_models or do_test):
@@ -369,12 +438,13 @@ def run_comparison(data: Data, fsets: dict[str, pd.MultiIndex], model_names: lis
 
     # Refit on the whole development set: all best configurations to save them,
     # otherwise only the winner of each feature set (for the test evaluation).
+    refit_seeds = derive_seeds(seeds[0])
     models_dir = out_dir / 'models'
     if save_models:
         models_dir.mkdir(exist_ok=True)
     for row in (best if save_models else winners).itertuples():
         cols = fsets[row.feature_set]
-        pipeline, _ = build_models(len(cols), seeds, scaler)[row.model]
+        pipeline, _ = build_models(len(cols), refit_seeds, scaler)[row.model]
         params = configs_by_key[(row.feature_set, row.model)][row.config_id]
         model = clone(pipeline).set_params(**params).fit(
             data.X_dev.loc[:, cols].to_numpy(np.float32), data.y_dev)
@@ -383,10 +453,10 @@ def run_comparison(data: Data, fsets: dict[str, pd.MultiIndex], model_names: lis
             path = models_dir / f'{row.feature_set}_{row.model}.joblib'
             dump({'pipeline': model, 'columns': list(cols),
                   'classes': list(data.encoder.classes_)}, path, compress=3)
-            print(f"Saved {path}")
+            logging.info(f"Saved {path}")
         if do_test and row.Index in winners.index:
             pred = model.predict(data.X_test.loc[:, cols].to_numpy(np.float32))
-            print(f"TEST  {row.feature_set}/{row.model}: acc={accuracy_score(data.y_test, pred):.3f}  "
+            logging.info(f"TEST  {row.feature_set}/{row.model}: acc={accuracy_score(data.y_test, pred):.3f}  "
                   f"macro-F1={f1_score(data.y_test, pred, average='macro'):.3f}")
 
 
@@ -399,7 +469,9 @@ def main() -> None:
     ap.add_argument('--models', nargs='+', choices=MODEL_NAMES, default=list(MODEL_NAMES))
     ap.add_argument('--scaler', choices=['standard', 'quantile'], default='standard',
                     help="scaler for logreg/knn/svm/mlp (quantile is more robust to skew/kurtosis outliers)")
-    ap.add_argument('--seed', type=int, default=0, help="master seed, see derive_seeds()")
+    ap.add_argument('--seeds', type=int, nargs='+', default=[0],
+                    help="master seeds; the whole cross-validation is repeated for each one "
+                         "(different folds and model seeds), see derive_seeds()")
     ap.add_argument('--n-folds', type=int, default=5)
     ap.add_argument('--n-jobs', type=int, default=-1,
                     help="worker processes over the (configuration, fold) fits; -1 = all cores")
@@ -408,13 +480,21 @@ def main() -> None:
     ap.add_argument('--save-models', action='store_true',
                     help="refit the best configuration of each (feature set, model) on the whole development set and save it")
     args = ap.parse_args()
+    setup_loggin(args.out_dir+'/logs.txt')
+    if len(set(args.seeds)) != len(args.seeds):
+        ap.error("--seeds must not contain duplicates")
+
+    logging.info(f"Seeds used are {args.seeds}.")
+    logging.info(f"Results will be saved in {args.out_dir}.")
+    logging.info(f"The scaler used is {args.scaler}.")
 
     data = load_data(args.data_dir)
     all_sets = build_feature_sets(data.X_dev.columns)
     fsets = {name: all_sets[name] for name in args.feature_sets}
-    print({name: len(cols) for name, cols in fsets.items()}, "columns per feature set\n")
+    logging.info("Feature sets are: ", {name, FEATURE_SET_SPECS[name] for name in args.feature_sets})
+    logging.info({name: len(cols) for name, cols in fsets.items()}, "columns per feature set\n")
 
-    run_comparison(data, fsets, args.models, args.out_dir, seed=args.seed, scaler=args.scaler,
+    run_comparison(data, fsets, args.models, args.out_dir, seeds=args.seeds, scaler=args.scaler,
                    n_folds=args.n_folds, n_jobs=args.n_jobs, do_test=args.test,
                    save_models=args.save_models)
 
